@@ -1,0 +1,531 @@
+# --- Libraries -----------------------------------------------
+library(haven)
+library(descr)
+library(sjPlot)
+library(gtsummary)
+library(table1)
+library(nnet)
+library(ggplot2)
+library(survey)
+library(tibble)
+library(labelled)
+library(lmtest)
+library(tidyverse)
+library(car)
+library(broom)
+library(stargazer)
+library(gt)
+
+# =============================================================================
+# MASTER THESIS 2026: APARNA KRISHNAN
+# Title: Association of Food Insecurity and Intimate Partner Violence in Bangladesh
+# Bangladesh DHS 2022 | Submission: April 27, 2026
+# =============================================================================
+
+# --- Master Thesis 2026 -----------------------------------------------
+
+setwd("C:/Users/aparn/OneDrive/master thesis/DHS Bangladesh 2022")
+
+BDHS2022 <- read_dta("Individual dataset.DTA")
+
+# what does the structure look like?
+str(BDHS2022)
+names(BDHS2022)
+
+#Variable Labels
+
+makeVlist <- function(x) {labels <- sapply(x, function(x) attr(x, "label"))
+tibble(name = names(labels), label = labels)}
+
+Labels <- makeVlist(BDHS2022)
+view(Labels)
+
+# Filter only married women from the ages between 15-49 (sample population)
+bdhs <- BDHS2022[BDHS2022$v501 == 1 & BDHS2022$v012 >= 15 & BDHS2022$v012 <= 49, ]
+
+# Survey weight
+bdhs$weight <- bdhs$v005 / 1000000
+var_label(bdhs$weight) <- "Survey weight"
+
+# ---DEPENDENT vARIABLE -----------------------------------------------
+
+# Dependent Variable: Attitude towards IPV
+# Code 8 = "Don't know" → NA throughout
+
+bdhs$IPV_ATTITUDE <- NULL
+bdhs$IPV_ATTITUDE <- "0: Does not justify"
+bdhs$IPV_ATTITUDE[bdhs$v744a == 1 | bdhs$v744b == 1 |
+                    bdhs$v744c == 1 | bdhs$v744d == 1 |
+                    bdhs$v744e == 1] <- "1: Justifies"
+bdhs$IPV_ATTITUDE[bdhs$v744a == 8 | bdhs$v744b == 8 |
+                    bdhs$v744c == 8 | bdhs$v744d == 8 |
+                    bdhs$v744e == 8] <- NA
+bdhs$IPV_ATTITUDE <- as.factor(bdhs$IPV_ATTITUDE)
+
+bdhs$IPV_ATTITUDE_NUM <- ifelse(bdhs$IPV_ATTITUDE == "1: Justifies", 1,
+                                ifelse(bdhs$IPV_ATTITUDE == "0: Does not justify", 0, NA))
+
+var_label(bdhs$IPV_ATTITUDE) <- "Justifies IPV (any scenario)"
+table(bdhs$IPV_ATTITUDE, useNA = "always")
+
+sum(bdhs$v744a == 8 | bdhs$v744b == 8 | 
+      bdhs$v744c == 8 | bdhs$v744d == 8 | 
+      bdhs$v744e == 8, na.rm = TRUE)
+
+# --- Trigger 1: Autonomy (goes out without telling husband) -----------
+bdhs$IPV_AUTONOMY <- "0: Does not justify"
+bdhs$IPV_AUTONOMY[bdhs$v744a == 1] <- "1: Justifies"
+bdhs$IPV_AUTONOMY[bdhs$v744a == 8] <- NA
+bdhs$IPV_AUTONOMY <- as.factor(bdhs$IPV_AUTONOMY)
+var_label(bdhs$IPV_AUTONOMY) <- "Justifies IPV: autonomy trigger"
+table(bdhs$IPV_AUTONOMY, useNA = "always")
+
+# --- Trigger 2: Domestic failure (neglects children / burns food) -----
+bdhs$IPV_DOMESTIC <- "0: Does not justify"
+bdhs$IPV_DOMESTIC[bdhs$v744b == 1 | 
+                    bdhs$v744e == 1] <- "1: Justifies"
+bdhs$IPV_DOMESTIC[bdhs$v744b == 8 | 
+                    bdhs$v744e == 8] <- NA
+bdhs$IPV_DOMESTIC <- as.factor(bdhs$IPV_DOMESTIC)
+var_label(bdhs$IPV_DOMESTIC) <- "Justifies IPV: domestic failure trigger"
+table(bdhs$IPV_DOMESTIC, useNA = "always")
+
+# --- Trigger 3: Relational conflict (argues with husband) -------------
+bdhs$IPV_RELATIONAL <- "0: Does not justify"
+bdhs$IPV_RELATIONAL[bdhs$v744c == 1] <- "1: Justifies"
+bdhs$IPV_RELATIONAL[bdhs$v744c == 8] <- NA
+bdhs$IPV_RELATIONAL <- as.factor(bdhs$IPV_RELATIONAL)
+var_label(bdhs$IPV_RELATIONAL) <- "Justifies IPV: relational conflict trigger"
+table(bdhs$IPV_RELATIONAL, useNA = "always")
+
+# --- Trigger 4: Sexual refusal (refuses sex with husband) -------------
+bdhs$IPV_SEXUAL_REFUSAL <- "0: Does not justify"
+bdhs$IPV_SEXUAL_REFUSAL[bdhs$v744d == 1] <- "1: Justifies"
+bdhs$IPV_SEXUAL_REFUSAL[bdhs$v744d == 8] <- NA
+bdhs$IPV_SEXUAL_REFUSAL <- as.factor(bdhs$IPV_SEXUAL_REFUSAL)
+var_label(bdhs$IPV_SEXUAL_REFUSAL) <- "Justifies IPV: sexual refusal trigger"
+table(bdhs$IPV_SEXUAL_REFUSAL, useNA = "always")
+
+# --- NA count check ---------------------------------------------------
+cat("NA counts:\n")
+cat("IPV_ATTITUDE:      ", sum(is.na(bdhs$IPV_ATTITUDE)), "\n")
+cat("IPV_AUTONOMY:      ", sum(is.na(bdhs$IPV_AUTONOMY)), "\n")
+cat("IPV_DOMESTIC:      ", sum(is.na(bdhs$IPV_DOMESTIC)), "\n")
+cat("IPV_RELATIONAL:    ", sum(is.na(bdhs$IPV_RELATIONAL)), "\n")
+cat("IPV_SEXUAL_REFUSAL:", sum(is.na(bdhs$IPV_SEXUAL_REFUSAL)), "\n")
+
+# --- Prevalence check -------------------------------------------------
+triggers <- c("IPV_ATTITUDE", "IPV_AUTONOMY",
+              "IPV_DOMESTIC", "IPV_RELATIONAL",
+              "IPV_SEXUAL_REFUSAL")
+
+for(v in triggers){
+  tab <- table(bdhs[[v]], useNA = "ifany")
+  justify_label <- names(tab)[grep("Justifies", names(tab))]
+  pct <- round(prop.table(tab) * 100, 1)
+  cat(v, "— Justifies:", pct[justify_label],
+      "% (n =", tab[justify_label], ")\n")}
+
+table(bdhs$v744a == 8, bdhs$v744b == 8)
+
+# --- INDEPENDENT VARIABLES -----------------------------------
+
+# New Variable: Age
+bdhs$AGE <- "NA"
+bdhs$AGE[bdhs$v012 >= 15 & bdhs$v012 <= 19] <- "15-19"
+bdhs$AGE[bdhs$v012 >= 20 & bdhs$v012 <= 24] <- "20-24"
+bdhs$AGE[bdhs$v012 >= 25 & bdhs$v012 <= 29] <- "25-29" 
+bdhs$AGE[bdhs$v012 >= 30 & bdhs$v012 <= 34] <- "30-34"
+bdhs$AGE[bdhs$v012 >= 35 & bdhs$v012 <= 39] <- "35-39"
+bdhs$AGE[bdhs$v012 >= 40 & bdhs$v012 <= 44] <- "40-44"
+bdhs$AGE[bdhs$v012 >= 45 & bdhs$v012 <= 49] <- "45-49"
+bdhs$AGE <- as.factor(bdhs$AGE)
+var_label(bdhs$AGE) <- "Age group"
+table(bdhs$AGE)
+
+# New Variable: RESIDENCE
+bdhs$RESIDENCE <- "NA"
+bdhs$RESIDENCE[bdhs$v025 == 1] <- "Urban"
+bdhs$RESIDENCE[bdhs$v025 == 2] <- "Rural"
+bdhs$RESIDENCE <- as.factor(bdhs$RESIDENCE)
+var_label(bdhs$RESIDENCE) <- "Residence"
+table(bdhs$RESIDENCE)
+
+# New Variable: DIVISION (8 divisions)
+bdhs$DIVISION <- "NA"
+bdhs$DIVISION[bdhs$v024 == 1] <- "Barishal"
+bdhs$DIVISION[bdhs$v024 == 2] <- "Chattogram"
+bdhs$DIVISION[bdhs$v024 == 3] <- "Dhaka"
+bdhs$DIVISION[bdhs$v024 == 4] <- "Khulna"
+bdhs$DIVISION[bdhs$v024 == 5] <- "Mymensingh"
+bdhs$DIVISION[bdhs$v024 == 6] <- "Rajshahi"
+bdhs$DIVISION[bdhs$v024 == 7] <- "Rangpur"
+bdhs$DIVISION[bdhs$v024 == 8] <- "Sylhet"
+bdhs$DIVISION <- as.factor(bdhs$DIVISION)
+var_label(bdhs$DIVISION) <- "Division"
+table(bdhs$DIVISION)
+
+# New Variable: H2_Divisions (Chattogram/Sylhet vs Other regions)
+bdhs$H2_DIVISIONS <- "Other divisions"
+bdhs$H2_DIVISIONS[bdhs$v024 == 2] <- "Chattogram"
+bdhs$H2_DIVISIONS[bdhs$v024 == 8] <- "Sylhet"
+bdhs$H2_DIVISIONS <- factor(bdhs$H2_DIVISIONS,levels = c("Other divisions", "Chattogram", "Sylhet"))
+bdhs$H2_DIVISIONS <- as.factor(bdhs$H2_DIVISIONS)
+var_label(bdhs$H2_DIVISIONS) <- "High-stress divisions"
+table(bdhs$H2_DIVISIONS)
+
+# New Variable: WEALTH
+bdhs$WEALTH <- "NA"
+bdhs$WEALTH[bdhs$v190 == 1] <- "Lowest"
+bdhs$WEALTH[bdhs$v190 == 2] <- "Second"
+bdhs$WEALTH[bdhs$v190 == 3] <- "Middle"
+bdhs$WEALTH[bdhs$v190 == 4] <- "Fourth"
+bdhs$WEALTH[bdhs$v190 == 5] <- "Highest"
+bdhs$WEALTH<- as.factor(bdhs$WEALTH)
+bdhs$WEALTH <- factor(bdhs$WEALTH,levels = c("Lowest", "Second", "Middle", "Fourth", "Highest"))
+var_label(bdhs$WEALTH) <- "Wealth quintile"
+table(bdhs$WEALTH)
+
+table(bdhs$v106, useNA = "always")
+attr(bdhs$v106, "label")
+attributes(bdhs$v106)$labels
+
+# New Variable: Education of woman
+bdhs$EDU_WOMAN <- "NA"
+bdhs$EDU_WOMAN[bdhs$v106 == 0] <- "No education"
+bdhs$EDU_WOMAN[bdhs$v106 == 1] <- "Primary"
+bdhs$EDU_WOMAN[bdhs$v106 == 2] <- "Secondary"
+bdhs$EDU_WOMAN[bdhs$v106 == 3] <- "Higher"
+bdhs$EDU_WOMAN <- as.factor(bdhs$EDU_WOMAN)
+bdhs$EDU_WOMAN <- factor(bdhs$EDU_WOMAN,levels = c("No education", "Primary", "Secondary", "Higher"))
+var_label(bdhs$EDU_WOMAN) <- "Woman's education"
+table(bdhs$EDU_WOMAN)
+
+# New Variable: Partner's Education
+bdhs$EDU_PARTNER <- "NA"
+bdhs$EDU_PARTNER[bdhs$v701 == 0] <- "No education"
+bdhs$EDU_PARTNER[bdhs$v701 == 1] <- "Primary"
+bdhs$EDU_PARTNER[bdhs$v701 == 2] <- "Secondary"
+bdhs$EDU_PARTNER[bdhs$v701 == 3] <- "Higher"
+bdhs$EDU_PARTNER <- as.factor(bdhs$EDU_PARTNER)
+var_label(bdhs$EDU_PARTNER) <- "Partner's education"
+bdhs$EDU_PARTNER <- factor(bdhs$EDU_PARTNER,levels = c("No education", "Primary", "Secondary", "Higher"))
+var_label(bdhs$EDU_PARTNER) <- "Partner's education"
+table(bdhs$EDU_PARTNER, useNA = "ifany")
+table(bdhs$EDU_PARTNER) 
+
+#New Variable: Household Head 
+
+table(bdhs$v151, useNA = "always")
+attr(bdhs$v151, "label")
+attributes(bdhs$v151)$labels
+
+bdhs$HH_HEAD <- "NA"
+bdhs$HH_HEAD[bdhs$v151 == 1] <- "Male head"
+bdhs$HH_HEAD[bdhs$v151 == 2] <- "Female head"
+
+bdhs$HH_HEAD <- factor(bdhs$HH_HEAD, levels = c("Male head", "Female head"))
+var_label(bdhs$HH_HEAD) <- "Household head"
+table(bdhs$HH_HEAD, useNA = "always")
+
+# =============================================================================
+# HOUSEHOLD FOOD INSECURITY PROXY INDEX
+
+# --- Component 1: Economic Deprivation (v190) -------------------------
+bdhs$FI_WEALTH <- 0
+bdhs$FI_WEALTH[bdhs$v190 %in% c(1, 2)] <- 1
+var_label(bdhs$FI_WEALTH) <- "FI Component: Economic deprivation"
+table(bdhs$FI_WEALTH, useNA = "always")
+
+# --- Component 2: Household Size Pressure (v136) ----------------------
+
+median_hh_size <- median(bdhs$v136, na.rm = TRUE)
+cat("Median household size in sample:", median_hh_size, "\n")
+
+bdhs$FI_HHSIZE <- 0
+bdhs$FI_HHSIZE[bdhs$v136 > median_hh_size] <- 1
+var_label(bdhs$FI_HHSIZE) <- "FI Component: Household size pressure"
+table(bdhs$FI_HHSIZE, useNA = "always")
+
+# --- Correlation between components -----------------------------------
+# too high = redundant; too low = no coherent underlying construct.
+
+phi_corr <- cor(bdhs$FI_WEALTH, bdhs$FI_HHSIZE, use = "complete.obs")
+cat("Phi correlation between FI components:", round(phi_corr, 3), "\n")
+
+# --- Composite Score --------------------------------------------
+# Sum of two components
+# 0 = no deprivation on any dimension
+# 2 = deprived on all four dimensions
+
+bdhs$FI_SCORE <- bdhs$FI_WEALTH + bdhs$FI_HHSIZE
+var_label(bdhs$FI_SCORE) <- "Food Insecurity Proxy"
+table(bdhs$FI_SCORE, useNA = "always")
+
+# --- HH_FOOD_INSECURITY -------------------
+
+bdhs$HH_FOOD_INSECURITY <- "Food Secure"
+bdhs$HH_FOOD_INSECURITY[bdhs$FI_SCORE == 0] <- "Food Secure"
+bdhs$HH_FOOD_INSECURITY[bdhs$FI_SCORE == 1] <- "Moderately Insecure"
+bdhs$HH_FOOD_INSECURITY[bdhs$FI_SCORE == 2] <- "Severely Insecure"
+
+bdhs$HH_FOOD_INSECURITY <- factor(bdhs$HH_FOOD_INSECURITY,
+                                  levels = c("Food Secure",
+                                             "Moderately Insecure",
+                                             "Severely Insecure"))
+var_label(bdhs$HH_FOOD_INSECURITY) <- "Household Food Insecurity Proxy"
+table(bdhs$HH_FOOD_INSECURITY, useNA = "always")
+
+table(bdhs$HH_FOOD_INSECURITY, bdhs$WEALTH)
+
+cat("Distribution of food insecurity proxy:\n")
+round(prop.table(table(bdhs$HH_FOOD_INSECURITY)) * 100, 1)
+
+
+# --- Survey design -------------------------------------------
+
+survey_design <- svydesign(ids = ~v021, strata = ~v022, weights = ~weight, data = bdhs)
+
+# --- Checks ---------------------------------------------------
+table(bdhs$IPV_AUTONOMY, useNA = "always")
+table(bdhs$IPV_DOMESTIC, useNA = "always")
+table(bdhs$IPV_RELATIONAL, useNA = "always")
+table(bdhs$IPV_SEXUAL_REFUSAL, useNA = "always")
+table(bdhs$AGE, useNA = "always")
+table(bdhs$RESIDENCE, useNA = "always")
+table(bdhs$DIVISION, useNA = "always")
+table(bdhs$H2_DIVISIONS, useNA = "always")
+table(bdhs$WEALTH, useNA = "always")
+table(bdhs$EDU_WOMAN, useNA = "always")
+table(bdhs$EDU_PARTNER, useNA = "always")
+table(bdhs$HH_FOOD_INSECURITY, useNA = "always")
+
+#---Summary Tables to undertsand data better-------------------
+
+# 1. Basic demographics
+summary(bdhs$AGE)           # Age
+table(bdhs$RESIDENCE)       # Urban/Rural  
+table(bdhs$WEALTH)          # Wealth
+table(bdhs$EDU_WOMAN)       # Education
+
+# 2. Regions
+table(bdhs$DIVISION)     # All 8 regions
+table(bdhs$H2_DIVISIONS)      # H2 grouping
+
+# 3. Dependent Variable 
+table(bdhs$IPV_ATTITUDE)
+
+
+# 4. Food insecurity
+table(bdhs$HH_FOOD_INSECURITY)
+
+# 5. Sample size
+nrow(bdhs)
+
+# 6. Education and Age
+table(bdhs$EDU_WOMAN, bdhs$AGE)
+
+#---Cross Tabulations--------------------------------
+
+# 1. Table 1: Sample characteristics
+table1(~ AGE +EDU_WOMAN + RESIDENCE + WEALTH + DIVISION, data = bdhs)
+
+# 2. Table 2: Characteristics by IPV outcome
+
+table1(~ AGE + EDU_WOMAN + RESIDENCE + DIVISION + WEALTH + HH_FOOD_INSECURITY | IPV_ATTITUDE,
+       data = subset(bdhs, !is.na(IPV_ATTITUDE)),
+       footnote = "355 women excluded due to 
+                   'don't know' responses on 
+                   IPV justification items")
+
+
+#Specifically High stress regions
+
+table1(~ AGE + EDU_WOMAN + RESIDENCE + HH_FOOD_INSECURITY | IPV_ATTITUDE + H2_DIVISIONS, 
+       data = subset(bdhs, !is.na(IPV_ATTITUDE)),
+       footnote = "355 women excluded due to 'don't know' responses on IPV justification items")
+
+# 3. Table 3: IPV triggers by food insecurity
+
+table1(~ IPV_ATTITUDE + IPV_AUTONOMY + IPV_RELATIONAL + IPV_DOMESTIC + IPV_SEXUAL_REFUSAL| HH_FOOD_INSECURITY+ H2_DIVISIONS, data = bdhs,footnote = "355 women excluded due to 'don't know' responses on IPV justification items") 
+
+table1(~ IPV_ATTITUDE + IPV_AUTONOMY + IPV_RELATIONAL + IPV_DOMESTIC + IPV_SEXUAL_REFUSAL| HH_FOOD_INSECURITY, data = bdhs,footnote = "355 women excluded due to 'don't know' responses on IPV justification items") 
+
+prop.table(table(bdhs$HH_FOOD_INSECURITY, bdhs$IPV_ATTITUDE, bdhs$DIVISION), margin=1)
+
+svytable(~HH_FOOD_INSECURITY + IPV_ATTITUDE, survey_design)
+
+#---MODELS------------------------------------------
+
+# Model 1: Food insecurity predicts IPV
+
+model1 <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, design = survey_design, family = quasibinomial())
+tbl_regression(model1, exponentiate = TRUE)
+tbl_regression(model1,exponentiate = TRUE, label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+exp(cbind(OR = coef(model1), confint(model1)))
+
+# Model 2: Interaction with Partner's education
+
+table(bdhs$IPV_ATTITUDE, useNA = "always")
+model2 <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE + EDU_PARTNER, family = quasibinomial(), design = survey_design)
+summary(model2)
+exp(cbind(OR = coef(model2), confint(model2)))
+tbl_regression(model2, exponentiate = TRUE)
+tbl_regression(model2,exponentiate = TRUE,label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+
+# Model 3: Does association vary by high-stress regions? (Chattogram/Sylhet)
+
+model3 <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY * H2_DIVISIONS + EDU_WOMAN + AGE + RESIDENCE,family = quasibinomial(), design = survey_design)
+library(survey)
+regTermTest(model3, ~HH_FOOD_INSECURITY:H2_DIVISIONS)
+design_chattogram <- subset(survey_design, v024 == 2)
+design_sylhet     <- subset(survey_design, v024 == 8)
+design_other      <- subset(survey_design, !v024 %in% c(2, 8))
+model3_chattogram <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = design_chattogram)
+model3_sylhet <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = design_sylhet)
+model3_other <- svyglm(IPV_ATTITUDE_NUM ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = design_other)
+
+tbl_regression(model3, exponentiate = TRUE, label = list(HH_FOOD_INSECURITY ~ "Household Food Insecurity Proxy", H2_DIVISIONS ~ "Division (high-stress)", EDU_WOMAN ~ "Woman's education", AGE ~ "Age group",
+                 RESIDENCE ~ "Residence")) |>
+  bold_p() |>
+  bold_labels() |>
+  add_significance_stars()
+
+#---MODELS FOR IPV ATTITUDES---------------------
+# Model 4a: Autonomy IPV  
+model4a <- svyglm(IPV_AUTONOMY ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = survey_design)
+tbl_regression(model4a, exponentiate = TRUE)
+tbl_regression(model4a,exponentiate = TRUE,label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+
+# Model 4b: Domestic IPV  
+model4b <- svyglm(IPV_DOMESTIC ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE,family = quasibinomial(), design = survey_design)
+tbl_regression(model4b, exponentiate = TRUE)
+tbl_regression(model4b,exponentiate = TRUE,label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+
+# Model 4c: Relational IPV 
+model4c <- svyglm(IPV_RELATIONAL ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = survey_design)
+tbl_regression(model4c, exponentiate = TRUE)
+tbl_regression(model4c,exponentiate = TRUE,label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+
+# Model 4d: Sexual IPV 
+model4d <- svyglm(IPV_SEXUAL_REFUSAL ~ HH_FOOD_INSECURITY + EDU_WOMAN + AGE + RESIDENCE, family = quasibinomial(), design = survey_design)
+tbl_regression(model4d, exponentiate = TRUE)
+tbl_regression(model4d,exponentiate = TRUE,label = list(HH_FOOD_INSECURITY = "Household Food Insecurity Proxy"))
+
+summary(model4a)
+summary(model4b)
+summary(model4c)
+summary(model4d)
+
+#---FINAL OUTPUTS-------------------------------------------------
+# 1. Odds ratios
+
+or_list <- list(
+  # Main models
+  model1          = exp(cbind(OR = coef(model1),          confint(model1))),
+  model2          = exp(cbind(OR = coef(model2),          confint(model2))),
+  model3          = exp(cbind(OR = coef(model3),          confint(model3))),
+  
+  # Trigger models
+  model4a         = exp(cbind(OR = coef(model4a),         confint(model4a))),
+  model4b         = exp(cbind(OR = coef(model4b),         confint(model4b))),
+  model4c         = exp(cbind(OR = coef(model4c),         confint(model4c))),
+  model4d         = exp(cbind(OR = coef(model4d),         confint(model4d))),
+  
+  # Stratified models (H3)
+  model3_chattogram = exp(cbind(OR = coef(model3_chattogram), confint(model3_chattogram))),
+  model3_sylhet     = exp(cbind(OR = coef(model3_sylhet),     confint(model3_sylhet))),
+  model3_other      = exp(cbind(OR = coef(model3_other),      confint(model3_other))))
+
+lapply(names(or_list), function(x) {write.csv(data.frame(or_list[[x]]), paste0("OR_", x, ".csv"))})
+lapply(names(or_list), function(x) {cat("\n====", x, "====\n") print(round(data.frame(or_list[[x]]), 3))})
+
+# 2. Bivariate tests
+svychisq(~HH_FOOD_INSECURITY + IPV_ATTITUDE, design = survey_design)
+svychisq(~H2_DIVISIONS + IPV_ATTITUDE, design = survey_design)
+
+# 3. Sample summary
+
+cat("ANALYTIC N =", nrow(bdhs), "\n")
+cat("Partner education missing:", sum(is.na(bdhs$EDU_PARTNER)), "(", round(sum(is.na(bdhs$EDU_PARTNER))/nrow(bdhs)*100,1), "%)\n")
+cat("% Justify IPV =", round(mean(bdhs$IPV_ATTITUDE, na.rm=TRUE)*100,1), "%\n")
+
+# 4. Weighted prevalence table
+
+svytable(~HH_FOOD_INSECURITY + IPV_ATTITUDE, survey_design)
+
+#---VISUAL TABLES----------------------------
+
+library(gt)
+library(gtsummary)
+library(ggplot2)
+library(dplyr)
+
+# Visual Table 1: Clean descriptives
+
+tbl_summary(bdhs %>% select(AGE, EDU_WOMAN, EDU_PARTNER, RESIDENCE, 
+                  DIVISION, WEALTH, HH_FOOD_INSECURITY),label = list(AGE ~ "Age group", EDU_WOMAN ~ "Woman's education", EDU_PARTNER ~ "Partner's education", RESIDENCE ~ "Residence", DIVISION ~ "Division", WEALTH ~ "Wealth quintile", HH_FOOD_INSECURITY ~ "Household food insecurity"), missing = "ifany") |>
+bold_labels() |>as_gt() |> gtsave("table1_sample_characteristics.html")
+
+# Visual Table 2: Sample characteristics with IPV attitudes
+
+tbl_summary(bdhs %>% filter(!is.na(IPV_ATTITUDE)) %>% select(AGE, EDU_WOMAN, EDU_PARTNER, RESIDENCE, DIVISION, WEALTH, HH_FOOD_INSECURITY, IPV_ATTITUDE), by = IPV_ATTITUDE,
+  label = list(AGE ~ "Age group", EDU_WOMAN ~ "Woman's education", EDU_PARTNER ~ "Partner's education", RESIDENCE ~ "Residence", DIVISION ~ "Division", WEALTH ~ "Wealth quintile", HH_FOOD_INSECURITY ~ "Household food insecurity"),missing = "no") |>
+  add_overall() |> add_p() |> bold_p() |> bold_labels() |> modify_spanning_header(all_stat_cols() ~ "**IPV Justification**") |> modify_footnote(all_stat_cols() ~ "355 women excluded due to don't know responses") |> as_gt() |>
+  gtsave("table2_by_IPV.html")
+
+#Table 3 : IPV justification prevalence by food insecurity
+
+tbl_summary(bdhs %>% filter(!is.na(IPV_ATTITUDE)) %>% select(IPV_ATTITUDE, IPV_AUTONOMY, IPV_RELATIONAL, IPV_DOMESTIC, IPV_SEXUAL_REFUSAL, HH_FOOD_INSECURITY),
+by = HH_FOOD_INSECURITY,label = list( IPV_ATTITUDE ~ "Any IPV justification", IPV_AUTONOMY ~ "Autonomy trigger",IPV_RELATIONAL ~ "Relational conflict trigger", IPV_DOMESTIC ~ "Domestic failure trigger",
+    IPV_SEXUAL_REFUSAL ~ "Sexual refusal trigger"),missing = "no") |>
+  add_overall() |> add_p() |> bold_p() |> bold_labels() |> modify_spanning_header(all_stat_cols() ~ "**Household Food Insecurity**") |>
+  as_gt() |> gtsave("table3_IPV_by_FI.html")
+
+#Table 4: Main regression results tables
+
+tbl1 <- tbl_regression(model1, exponentiate = TRUE, label = list( HH_FOOD_INSECURITY ~ "Household food insecurity", EDU_WOMAN ~ "Woman's education", AGE ~ "Age group", RESIDENCE ~ "Residence")) |>
+  bold_p() |> bold_labels()
+
+tbl2 <- tbl_regression(model2,
+                       exponentiate = TRUE,
+                       label = list(
+                         HH_FOOD_INSECURITY ~ "Household food insecurity",
+                         EDU_WOMAN ~ "Woman's education",
+                         EDU_PARTNER ~ "Partner's education",
+                         AGE ~ "Age group",
+                         RESIDENCE ~ "Residence"
+                       )) |>
+  bold_p() |> bold_labels()
+
+tbl_merge(list(tbl1, tbl2), tab_spanner = c("**Model 1: Base model**", "**Model 2: + Partner education**")) |>
+  as_gt() |>
+tab_header(title = "Odds ratios for IPV justification") |> tab_footnote("OR = odds ratio; CI = confidence interval.Survey-weighted logistic regression.") |>
+  gtsave("table4_regression_main.html")
+
+#Table 5: Regional moderation (H3)
+  
+tbl_c <- tbl_regression(model3_chattogram, exponentiate = TRUE, label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |>
+bold_p()
+tbl_s <- tbl_regression(model3_sylhet, exponentiate = TRUE, label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |>
+  bold_p()
+
+tbl_o <- tbl_regression(model3_other, exponentiate = TRUE, label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |>
+bold_p()
+tbl_merge(list(tbl_o, tbl_c, tbl_s), tab_spanner = c("**Other divisions**", "**Chattogram**", "**Sylhet**")) |> as_gt() |>tab_header(title = "Stratified models: food insecurity and IPV by division") |>
+gtsave("table5_stratified.html")
+
+#Table 6: IPV trigger models (Models 4a–4d)
+
+tbl4a <- tbl_regression(model4a, exponentiate = TRUE,
+                        label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |> bold_p()
+tbl4b <- tbl_regression(model4b, exponentiate = TRUE,
+                        label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |> bold_p()
+tbl4c <- tbl_regression(model4c, exponentiate = TRUE,
+                        label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |> bold_p()
+tbl4d <- tbl_regression(model4d, exponentiate = TRUE,
+                        label = list(HH_FOOD_INSECURITY ~ "Food insecurity")) |> bold_p()
+
+tbl_merge(list(tbl4a, tbl4b, tbl4c, tbl4d),tab_spanner = c("**Autonomy**", "**Domestic**", "**Relational**", "**Sexual refusal**")) |> as_gt() |> tab_header(title = "IPV trigger-specific models") |>
+gtsave("table6_triggers.html")
+
